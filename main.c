@@ -24,14 +24,22 @@
 #define CAMPWREN        PORTCbits.RC4
 /* i.e. uint8_t <variable_name>; */
 
+#define MODE_STANDBY    0
+#define MODE_SF_TX      1
+#define MODE_SF_RX      2
 /******************************************************************************/
 /* Main Program                                                               */
 /******************************************************************************/
 void main(void)
 {
-    unsigned int dacval, i;
+    unsigned int dacval, i, timeout;
     bool thiefdetected = 0;
     
+    uint8_t mode = MODE_STANDBY;
+    uint8_t cmdn = 0;
+    bool sleep_well = true;
+
+
     /* Configure the oscillator for the device */
     ConfigureOscillator();
 
@@ -48,8 +56,8 @@ void main(void)
     TRISAbits.TRISA4 = 0;
     TRISAbits.TRISA5 = 1;
 
-    TRISCbits.TRISC4 = 0;
-    TRISCbits.TRISC5 = 0;
+    TRISCbits.TRISC4 = 0; //UART TX
+    TRISCbits.TRISC5 = 1; //UART RX
     //enable weak pull ups
     //OPTION_REGbits.nWPUEN = 0;
     //weak pull up
@@ -71,6 +79,191 @@ void main(void)
     DACCON0bits.DACEN = 1;
     ANSELAbits.ANSA4 = 0; //enable digital input for PORTA4
     dacval = 0;
+    
+    if (0) //ADC config
+    {
+        //config FVR:
+        FVRCONbits.FVREN = 1; //enable
+        FVRCONbits.TSEN = 1; //enable temp indicator
+        FVRCONbits.TSRNG = 0; //temp low range, min Vdd 1.8V
+        FVRCONbits.ADFVR = 0; //AD ref 2=2.048V, 0=off
+        ADCON1bits.ADFM = 1; //right justified
+        ADCON1bits.ADPREF = 0; //3=Vref to FVR (fixed voltage reference), 0=VDD
+        
+        ADCON0bits.CHS = 29; //channel select tem indicator
+        
+        ADCON1bits.ADCS = 0; //Fosc/2
+        ADCON0bits.ADON = 1; //enable ADC
+        //PIE1bits.ADIE = 1; //enable interrupt flag
+        
+        while(0)
+        {
+            asm("CLRWDT");
+            for(i=0; i<20000; i++){} //delay
+            
+            ADCON0bits.GO_nDONE = 1; //start conversion
+
+            while(!PIR1bits.ADIF){}; //wait until conversion is done
+
+            uint16_t re1, re2, res;
+            re1 = ADRESH;
+            re2 = ADRESL;
+            res = re1<<8 | re2;
+        }
+        
+    }
+    
+    if (1) //UART config
+    {        
+        SPBRGH = 0;
+        SPBRGL = 12; //9600baud for FOSC default 500kHz = 12
+        //building EUSART communication
+        BAUDCONbits.BRG16 = 1; //BRG16 = 1, BRGH = 1; => FOSC/[4 (n+1)]
+        TXSTAbits.BRGH = 1;
+        TXSTAbits.SYNC = 0; //asynchronous communication
+        RCSTAbits.SPEN = 1; //enable UART, pins
+        TXSTAbits.TXEN = 1; //TXIF is set at this moment
+        RCSTAbits.CREN = 1; //enable uart reception
+        uint8_t sfi = 0;
+        
+        char sf_at_cmd[5] = "AT\r\n";
+        char sf_at_temp[8] = "AT$T?\r\n";
+        char sf_at_volt[8] = "AT$V?\r\n";
+        char sf_frame[20] = "AT$SF=123456789012\r\n";
+        uint8_t sf_frame_offset = 6;
+        char sf_rec_chars[24];
+        char * sf_tx_chars;
+        bool sf_hk_report = false;
+        uint8_t sf_errorcnt = 0;
+        uint16_t hk_to;
+        
+        //enable external interrupt
+        INTCONbits.INTE = 1;
+        //enable interrupt on change
+        INTCONbits.IOCIE = 1;
+        //detect rising (P) falling (N) edge
+        IOCAPbits.IOCAP5 = 1;
+        IOCAFbits.IOCAF5 = 0;
+        
+        LATAbits.LATA4 = 0;
+        
+        while(1)
+        {                       
+            switch(mode)
+            {
+            case MODE_STANDBY:
+                LATAbits.LATA4 = 0;
+                hk_to = 900;
+                while (sleep_well)
+                {
+                    IOCAFbits.IOCAF5 = 0;
+                    asm("NOP");  
+                    asm("SLEEP");
+                    asm("NOP");
+                    LATAbits.LATA4 = 1; for(i=0; i<200; i++) {} LATAbits.LATA4 = 0; //blink
+                    hk_to--;
+                    if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag
+                    {
+                        sleep_well = false;                        
+                        if (hk_to == 0)
+                            sf_hk_report = true;
+                        else
+                            sf_hk_report = false;
+                    }
+                }
+                LATAbits.LATA4 = 1;
+                {                    
+                    mode = MODE_SF_TX;
+                    sfi = 0;
+                    
+                    if (cmdn==0) {sf_tx_chars = sf_at_cmd;}
+                    if (cmdn==1) {sf_tx_chars = sf_at_temp;}
+                    if (cmdn==2) {sf_tx_chars = sf_at_volt;}
+                    if (cmdn==3) {sf_tx_chars = sf_frame;}
+                    
+                    //INTCONbits.PEIE = 1; //peripheral wakeup from sleep
+                    //PIE1bits.RCIE = 1; //enable RX interrupt
+                    //PIE1bits.TXIE = 1; //enable TX interrupt
+                }
+                break;
+            case MODE_SF_TX:
+                if (PIR1bits.TXIF) //UART has space for char
+                {
+                    TXREG = sf_tx_chars[sfi];
+                    if (sf_tx_chars[sfi] == '\n')
+                    {
+                        mode = MODE_SF_RX;
+                        sfi = 0;
+                        timeout = 0;
+                    }else
+                    {
+                        sfi++;
+                    }
+                }
+                break;
+            case MODE_SF_RX:
+                if (PIR1bits.RCIF) //a char is received
+                {
+                    asm("CLRWDT");
+                    sf_rec_chars[sfi++] = RCREG;
+                    timeout = 0;
+                }
+                timeout++;
+                asm("CLRWDT");
+                //if (!STATUSbits.nTO) //watchdog timeout
+                if (timeout>40000)
+                {
+                    //INTCONbits.PEIE = 0; //peripheral wakeup from sleep
+                    //PIE1bits.RCIE = 0; //enable RX interrupt
+                    //PIE1bits.TXIE = 0; //enable TX interrupt
+                    mode = MODE_STANDBY;
+                    if (sf_rec_chars[0] != 'E')
+                    {
+                        switch (cmdn)
+                        {
+                        case 1:
+                            for(i=0; i<4; i++)
+                                sf_frame[sf_frame_offset+i] = sf_rec_chars[i];
+                        case 2:
+                            for(i=0; i<4; i++)
+                                sf_frame[sf_frame_offset+4+i] = sf_rec_chars[i];
+                            if (sf_hk_report)
+                            {
+                                sf_frame[sf_frame_offset+4+4] = '\r';
+                                sf_frame[sf_frame_offset+4+5] = '\n';                                
+                            }
+                            else
+                            {
+                                sf_frame[sf_frame_offset+4+4] = 'A';
+                                sf_frame[sf_frame_offset+4+5] = 'A';
+                                sf_frame[sf_frame_offset+4+6] = '\r';
+                                sf_frame[sf_frame_offset+4+7] = '\n';
+                            }
+                            break;
+                        default:
+                            break;
+                        }
+                        cmdn++;
+                        sf_rec_chars[0] = 'E';
+                    }else
+                    {
+                        sf_errorcnt ++;
+                    }
+                    if (cmdn == 4 || sf_errorcnt == 10)
+                    {
+                        sf_errorcnt = 0;
+                        cmdn = 0;
+                        sleep_well = true;
+                    }
+                }
+                break;
+            default:
+                mode = MODE_STANDBY;
+                break;
+            }            
+            
+        }
+    }
     while(1)
     {
         if (!thiefdetected)
