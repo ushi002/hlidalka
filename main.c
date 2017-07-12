@@ -27,6 +27,13 @@
 #define MODE_STANDBY    0
 #define MODE_SF_TX      1
 #define MODE_SF_RX      2
+
+#define CMDNUM_AT_CHECK   0 //first command! must stay first!
+#define CMDNUM_AT_TEMP    1
+#define CMDNUM_AT_VOLT    2
+#define CMDNUM_AT_TXFRAME 3
+#define CMDNUM_NA         4 //last one, not available (out of range)
+
 /******************************************************************************/
 /* Main Program                                                               */
 /******************************************************************************/
@@ -130,7 +137,7 @@ void main(void)
         char sf_at_temp[8] = "AT$T?\r\n";
         char sf_at_volt[8] = "AT$V?\r\n";
         char sf_frame[20] = "AT$SF=123456789012\r\n";
-        uint8_t sf_frame_offset = 6;
+        const uint8_t sf_frame_offset = 6;
         char sf_rec_chars[24];
         char * sf_tx_chars;
         bool sf_hk_report = false;
@@ -176,10 +183,10 @@ void main(void)
                     mode = MODE_SF_TX;
                     sfi = 0;
                     
-                    if (cmdn==0) {sf_tx_chars = sf_at_cmd;}
-                    if (cmdn==1) {sf_tx_chars = sf_at_temp;}
-                    if (cmdn==2) {sf_tx_chars = sf_at_volt;}
-                    if (cmdn==3) {sf_tx_chars = sf_frame;}
+                    if (cmdn==CMDNUM_AT_CHECK) {sf_tx_chars = sf_at_cmd;}
+                    if (cmdn==CMDNUM_AT_TEMP) {sf_tx_chars = sf_at_temp;}
+                    if (cmdn==CMDNUM_AT_VOLT) {sf_tx_chars = sf_at_volt;}
+                    if (cmdn==CMDNUM_AT_TXFRAME) {sf_tx_chars = sf_frame;}
                     
                     //INTCONbits.PEIE = 1; //peripheral wakeup from sleep
                     //PIE1bits.RCIE = 1; //enable RX interrupt
@@ -221,10 +228,10 @@ void main(void)
                     {
                         switch (cmdn)
                         {
-                        case 1:
+                        case CMDNUM_AT_TEMP:
                             for(i=0; i<4; i++)
                                 sf_frame[sf_frame_offset+i] = sf_rec_chars[i];
-                        case 2:
+                        case CMDNUM_AT_VOLT:
                             for(i=0; i<4; i++)
                                 sf_frame[sf_frame_offset+4+i] = sf_rec_chars[i];
                             if (sf_hk_report)
@@ -247,12 +254,12 @@ void main(void)
                         sf_rec_chars[0] = 'E';
                     }else
                     {
-                        sf_errorcnt ++;
+                        sf_errorcnt++;
                     }
-                    if (cmdn == 4 || sf_errorcnt == 10)
+                    if (cmdn >= CMDNUM_NA || sf_errorcnt >= 10)
                     {
                         sf_errorcnt = 0;
-                        cmdn = 0;
+                        cmdn = CMDNUM_AT_CHECK; //first command
                         sleep_well = true;
                     }
                 }
