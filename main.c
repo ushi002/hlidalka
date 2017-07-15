@@ -10,6 +10,7 @@
 
 #include <stdint.h>        /* For uint8_t definition */
 #include <stdbool.h>       /* For true/false definition */
+#include <stdlib.h>        /* c standard library */
 
 #include "system.h"        /* System funct/params, like osc/peripheral config */
 #include "user.h"          /* User funct/params, such as InitApp */
@@ -34,6 +35,9 @@
 #define CMDNUM_AT_TXFRAME 3
 #define CMDNUM_NA         4 //last one, not available (out of range)
 
+#define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
+
+#define HK_TIMEOUT        900 //number of watchdog wakeups (4 seconds per wake)
 /******************************************************************************/
 /* Main Program                                                               */
 /******************************************************************************/
@@ -143,6 +147,7 @@ void main(void)
         bool sf_hk_report = false;
         uint8_t sf_errorcnt = 0;
         uint16_t hk_to;
+        int16_t number_i16;
         
         //enable external interrupt
         INTCONbits.INTE = 1;
@@ -154,13 +159,14 @@ void main(void)
         
         LATAbits.LATA4 = 0;
         
+        hk_to = HK_TIMEOUT;
         while(1)
-        {                       
+        {
+            asm("CLRWDT");
             switch(mode)
             {
             case MODE_STANDBY:
                 LATAbits.LATA4 = 0;
-                hk_to = 900;
                 while (sleep_well)
                 {
                     IOCAFbits.IOCAF5 = 0;
@@ -169,9 +175,9 @@ void main(void)
                     asm("NOP");
                     LATAbits.LATA4 = 1; for(i=0; i<200; i++) {} LATAbits.LATA4 = 0; //blink
                     hk_to--;
-                    if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag
+                    if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag - alarm
                     {
-                        sleep_well = false;                        
+                        sleep_well = false; //cannot fall asleep as UART does not work
                         if (hk_to == 0)
                             sf_hk_report = true;
                         else
@@ -216,7 +222,6 @@ void main(void)
                     timeout = 0;
                 }
                 timeout++;
-                asm("CLRWDT");
                 //if (!STATUSbits.nTO) //watchdog timeout
                 if (timeout>40000)
                 {
@@ -224,30 +229,33 @@ void main(void)
                     //PIE1bits.RCIE = 0; //enable RX interrupt
                     //PIE1bits.TXIE = 0; //enable TX interrupt
                     mode = MODE_STANDBY;
-                    if (sf_rec_chars[0] != 'E')
+                    if (sf_rec_chars[0] != 'E') //correctly received uart message
                     {
+                        number_i16 = strtol(sf_rec_chars, NULL, 10); //convert first num to int16
                         switch (cmdn)
                         {
                         case CMDNUM_AT_TEMP:
-                            for(i=0; i<4; i++)
-                                sf_frame[sf_frame_offset+i] = sf_rec_chars[i];
+                            sf_frame[sf_frame_offset+0] = TO_HEX(((number_i16 & 0xF000) >> 12));
+                            sf_frame[sf_frame_offset+1] = TO_HEX(((number_i16 & 0x0F00) >> 8));
+                            sf_frame[sf_frame_offset+2] = TO_HEX(((number_i16 & 0x00F0) >> 4));
+                            sf_frame[sf_frame_offset+3] = TO_HEX((number_i16 & 0x000F));
+                            break;
                         case CMDNUM_AT_VOLT:
-                            for(i=0; i<4; i++)
-                                sf_frame[sf_frame_offset+4+i] = sf_rec_chars[i];
-                            if (sf_hk_report)
+                            sf_frame[sf_frame_offset+4] = TO_HEX(((number_i16 & 0xF000) >> 12));
+                            sf_frame[sf_frame_offset+5] = TO_HEX(((number_i16 & 0x0F00) >> 8));
+                            sf_frame[sf_frame_offset+6] = TO_HEX(((number_i16 & 0x00F0) >> 4));
+                            sf_frame[sf_frame_offset+7] = TO_HEX((number_i16 & 0x000F));
+                            sf_frame[sf_frame_offset+8] = '0';
+                            if (!sf_hk_report) //alarm!
                             {
-                                sf_frame[sf_frame_offset+4+4] = '\r';
-                                sf_frame[sf_frame_offset+4+5] = '\n';                                
+                                sf_frame[sf_frame_offset+8] += 0x1;
                             }
-                            else
-                            {
-                                sf_frame[sf_frame_offset+4+4] = 'A';
-                                sf_frame[sf_frame_offset+4+5] = 'A';
-                                sf_frame[sf_frame_offset+4+6] = '\r';
-                                sf_frame[sf_frame_offset+4+7] = '\n';
-                            }
+                            sf_frame[sf_frame_offset+9] = '0';
+                            sf_frame[sf_frame_offset+10] = '\r';
+                            sf_frame[sf_frame_offset+11] = '\n';
                             break;
                         default:
+                            //CMDNUM_AT_TXFRAME
                             break;
                         }
                         cmdn++;
@@ -255,12 +263,15 @@ void main(void)
                     }else
                     {
                         sf_errorcnt++;
+                        sf_rec_chars[1] = 'E';
                     }
                     if (cmdn >= CMDNUM_NA || sf_errorcnt >= 10)
                     {
+                        //all messages sent or 10x message error
                         sf_errorcnt = 0;
                         cmdn = CMDNUM_AT_CHECK; //first command
                         sleep_well = true;
+                        hk_to = HK_TIMEOUT;
                     }
                 }
                 break;
