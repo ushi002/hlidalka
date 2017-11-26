@@ -144,7 +144,7 @@ void main(void)
         const uint8_t sf_frame_offset = 6;
         char sf_rec_chars[24];
         char * sf_tx_chars;
-        bool sf_hk_report = false;
+        bool sf_report_alarm = false;
         uint8_t sf_errorcnt = 0;
         uint16_t hk_to;
         int16_t number_i16;
@@ -178,10 +178,10 @@ void main(void)
                     if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag - alarm
                     {
                         sleep_well = false; //cannot fall asleep as UART does not work
-                        if (hk_to == 0)
-                            sf_hk_report = true;
+                        if (IOCAFbits.IOCAF5) //alarm has priority
+                            sf_report_alarm = true;
                         else
-                            sf_hk_report = false;
+                            sf_report_alarm = false;
                     }
                 }
                 LATAbits.LATA4 = 1;
@@ -246,7 +246,7 @@ void main(void)
                             sf_frame[sf_frame_offset+6] = TO_HEX(((number_i16 & 0x00F0) >> 4));
                             sf_frame[sf_frame_offset+7] = TO_HEX((number_i16 & 0x000F));
                             sf_frame[sf_frame_offset+8] = '0';
-                            if (!sf_hk_report) //alarm!
+                            if (sf_report_alarm) //alarm!
                             {
                                 sf_frame[sf_frame_offset+8] += 0x1;
                             }
