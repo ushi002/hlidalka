@@ -37,7 +37,9 @@
 
 #define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
 
+//counts in WDOG wake ups:
 #define HK_TIMEOUT        900 //number of watchdog wakeups (4 seconds per wake)
+#define REPORT_TIMEOUT      2 //give service man time to turn off the device
 /******************************************************************************/
 /* Main Program                                                               */
 /******************************************************************************/
@@ -145,6 +147,8 @@ void main(void)
         char sf_rec_chars[24];
         char * sf_tx_chars;
         bool sf_report_alarm = false;
+        bool make_report = false;
+        uint16_t make_report_to = 0;
         uint8_t sf_errorcnt = 0;
         uint16_t hk_to;
         int16_t number_i16;
@@ -177,11 +181,25 @@ void main(void)
                     hk_to--;
                     if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag - alarm
                     {
-                        sleep_well = false; //cannot fall asleep as UART does not work
+                        make_report = true;
                         if (IOCAFbits.IOCAF5) //alarm has priority
                             sf_report_alarm = true;
                         else
                             sf_report_alarm = false;
+                    }
+                    if (make_report)
+                    {
+                        //give the service man a chance to turn the device off
+                        if (make_report_to >= REPORT_TIMEOUT ||
+                                !sf_report_alarm) //won't delay HK report
+                        {
+                            make_report_to = 0;
+                            make_report = false;
+                            sleep_well = false; //cannot fall asleep as UART does not work
+                        }else
+                        {
+                            make_report_to++;
+                        }
                     }
                 }
                 LATAbits.LATA4 = 1;
