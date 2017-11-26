@@ -40,6 +40,7 @@
 //counts in WDOG wake ups:
 #define HK_TIMEOUT        900 //number of watchdog wakeups (4 seconds per wake)
 #define REPORT_TIMEOUT      2 //give service man time to turn off the device
+#define STARTUP_TIMEOUT     2 //give service man time to disappear
 /******************************************************************************/
 /* Main Program                                                               */
 /******************************************************************************/
@@ -149,6 +150,7 @@ void main(void)
         bool sf_report_alarm = false;
         bool make_report = false;
         uint16_t make_report_to = 0;
+        uint16_t startup_to = 0;
         uint8_t sf_errorcnt = 0;
         uint16_t hk_to;
         int16_t number_i16;
@@ -179,6 +181,11 @@ void main(void)
                     asm("NOP");
                     LATAbits.LATA4 = 1; for(i=0; i<200; i++) {} LATAbits.LATA4 = 0; //blink
                     hk_to--;
+                    if (startup_to < STARTUP_TIMEOUT)
+                    {
+                        startup_to++;
+                        IOCAFbits.IOCAF5 = 0;
+                    }
                     if(IOCAFbits.IOCAF5 || hk_to == 0)    //PORTA.5 flag - alarm
                     {
                         make_report = true;
