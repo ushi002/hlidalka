@@ -38,7 +38,8 @@
 #define TO_HEX(i) (i <= 9 ? '0' + i : 'A' - 10 + i)
 
 //counts in WDOG wake ups:
-#define HK_TIMEOUT        900 //number of watchdog wakeups (4 seconds per wake)
+//900 caa 1 hour
+#define HK_TIMEOUT        24*900 //number of watchdog wakeups (4 seconds per wake)
 #define REPORT_TIMEOUT      2 //give service man time to turn off the device
 #define STARTUP_TIMEOUT     2 //give service man time to disappear
 /******************************************************************************/
